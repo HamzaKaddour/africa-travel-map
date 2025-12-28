@@ -1,3 +1,38 @@
+// ============================================================
+// Africa Travel Map - Full app.js
+// - Clickable countries
+// - Status (gray/green/orange) + notes saved per country
+// - Tooltip on hover (desktop) + tap-friendly behavior (mobile)
+// - Mobile bottom-sheet panel toggle
+// - Shows names in Arabic + English + French (if available in GeoJSON)
+// ============================================================
+
+// -------------------- MOBILE PANEL TOGGLE --------------------
+const sidebarEl = document.getElementById("sidebar");
+const panelToggleBtn = document.getElementById("panelToggle");
+
+function setPanelOpen(isOpen) {
+  if (!sidebarEl || !panelToggleBtn) return;
+  sidebarEl.classList.toggle("open", isOpen);
+  panelToggleBtn.classList.toggle("closed", !isOpen);
+  panelToggleBtn.textContent = isOpen ? "✕ Close" : "☰ Panel";
+}
+
+// Default: closed on mobile, ignored on desktop layout
+setPanelOpen(false);
+
+if (panelToggleBtn) {
+  panelToggleBtn.addEventListener("click", () => {
+    const isOpen = sidebarEl.classList.contains("open");
+    setPanelOpen(!isOpen);
+  });
+}
+
+// Helper: true on small screens
+function isMobile() {
+  return window.matchMedia && window.matchMedia("(max-width: 820px)").matches;
+}
+
 // -------------------- MAP SETUP --------------------
 const map = L.map("map", { preferCanvas: true }).setView([2, 20], 3);
 
@@ -7,71 +42,168 @@ L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
 
 // -------------------- STATE --------------------
 let selectedLayer = null;
-let selectedCountryName = null;
+let selectedCountryId = null;
+let selectedCountryNames = null; // {en, fr, ar, fallback}
 let geojsonLayer = null;
 
-// user-specific saved data (in their browser)
+// Saved per-user in browser
+// Structure:
+// countryData[id] = { status: "visited|wishlist|not_visited", notes: "..." }
 let countryData = JSON.parse(localStorage.getItem("africaMapData")) || {};
 
 // -------------------- COLORS --------------------
 function getColor(status) {
   if (status === "visited") return "#2ecc71";   // green
   if (status === "wishlist") return "#f5b041";  // light orange
-  return "#bdc3c7";                             // gray (not visited default)
+  return "#bdc3c7";                             // gray (default)
 }
 
-// -------------------- NAME FIELD DETECTION --------------------
-// Fixes the "undefined" problem by discovering the correct property key once.
-let NAME_FIELD = null;
+// -------------------- UTIL: HTML escape --------------------
+function escapeHtml(str) {
+  return String(str || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
 
-function detectNameField(feature) {
+// -------------------- STATUS LABEL --------------------
+function statusLabel(status) {
+  if (status === "visited") return "Visited";
+  if (status === "wishlist") return "To be visited";
+  return "Not visited";
+}
+
+// -------------------- COUNTRY ID DETECTION --------------------
+// We store by ID (ISO code if present) to keep data stable.
+function getCountryId(feature) {
   const p = feature.properties || {};
-  const keys = Object.keys(p);
 
-  // common candidates first
+  // Common ISO fields in many country GeoJSON sources
+  const candidates = [
+    "ISO_A3", "iso_a3",
+    "ADM0_A3", "adm0_a3",
+    "ISO3", "iso3",
+    "ISO", "iso",
+    "WB_A3", "wb_a3",
+    "id", "ID"
+  ];
+
+  for (const k of candidates) {
+    const v = p[k];
+    if (typeof v === "string" && v.trim().length >= 2) return v.trim();
+    if (typeof v === "number" && Number.isFinite(v)) return String(v);
+  }
+
+  // Fallback: use a detected name (still works, but less stable)
+  const names = getCountryNames(feature);
+  return names.en || names.fr || names.ar || names.fallback || "Unknown";
+}
+
+// -------------------- NAME FIELDS DETECTION (AR/EN/FR) --------------------
+// This tries to find name in multiple languages based on common keys.
+// If your GeoJSON uses different keys, it will still fallback to something sensible.
+function pickFirstString(p, keys) {
+  for (const k of keys) {
+    const v = p[k];
+    if (typeof v === "string" && v.trim().length > 0) return v.trim();
+  }
+  return "";
+}
+
+function detectFallbackName(p) {
+  // Generic fallbacks if no language-specific match
   const preferred = [
     "ADMIN", "admin",
     "NAME", "name",
     "NAME_EN", "name_en",
-    "COUNTRY", "country",
-    "SOVEREIGNT", "sovereignt",
     "NAME_LONG", "name_long",
-    "FORMAL_EN", "formal_en",
+    "SOVEREIGNT", "sovereignt",
+    "FORMAL_EN", "formal_en"
   ];
+  const v = pickFirstString(p, preferred);
+  if (v) return v;
 
-  for (const k of preferred) {
-    if (typeof p[k] === "string" && p[k].trim().length > 0) return k;
-  }
-
-  // anything containing "name"
-  const nameLike = keys.find(
-    (k) => k.toLowerCase().includes("name") && typeof p[k] === "string"
-  );
-  if (nameLike) return nameLike;
+  // any key containing "name"
+  const keys = Object.keys(p);
+  const nameLike = keys.find(k => k.toLowerCase().includes("name") && typeof p[k] === "string" && p[k].trim());
+  if (nameLike) return p[nameLike].trim();
 
   // fallback: first non-empty string property
   for (const k of keys) {
-    if (typeof p[k] === "string" && p[k].trim().length > 0) return k;
+    if (typeof p[k] === "string" && p[k].trim().length > 0) return p[k].trim();
   }
-
-  return null;
+  return "Unknown";
 }
 
-function getCountryName(feature) {
+function getCountryNames(feature) {
   const p = feature.properties || {};
-  if (!NAME_FIELD) {
-    NAME_FIELD = detectNameField(feature);
-    console.log("Detected country name field:", NAME_FIELD);
-    console.log("Example properties:", p);
-  }
-  const name = NAME_FIELD ? p[NAME_FIELD] : null;
-  return (typeof name === "string" && name.trim().length > 0) ? name : "Unknown";
+
+  // These are common naming conventions across datasets.
+  // Arabic can appear as NAME_AR / name_ar / AR / ArabicName etc.
+  const en = pickFirstString(p, [
+    "NAME_EN", "name_en",
+    "EN_NAME", "en_name",
+    "NAMEENG", "nameeng",
+    "NAME", "name",
+    "ADMIN", "admin"
+  ]);
+
+  const fr = pickFirstString(p, [
+    "NAME_FR", "name_fr",
+    "FR_NAME", "fr_name",
+    "NAMEFRE", "namefre",
+    "NAME_FRN", "name_frn",
+  ]);
+
+  const ar = pickFirstString(p, [
+    "NAME_AR", "name_ar",
+    "AR_NAME", "ar_name",
+    "NAME_ARABIC", "name_arabic",
+    "ARABIC", "arabic",
+    "NAME_ARAB", "name_arab",
+    "NAMEAR", "namear"
+  ]);
+
+  const fallback = detectFallbackName(p);
+
+  return {
+    en: en || "",
+    fr: fr || "",
+    ar: ar || "",
+    fallback
+  };
+}
+
+// Format display name in sidebar + tooltip
+function formatDisplayName(names) {
+  // Show all available: English • Français • العربية
+  // (If one is missing, skip it.)
+  const parts = [];
+  if (names.en) parts.push(names.en);
+  if (names.fr) parts.push(names.fr);
+
+  // Arabic: render with RTL direction for correctness
+  if (names.ar) parts.push(`<span dir="rtl" lang="ar">${escapeHtml(names.ar)}</span>`);
+
+  if (parts.length === 0) return escapeHtml(names.fallback || "Unknown");
+
+  // English/French are plain text; Arabic already escaped above
+  // Escape EN/FR too:
+  const safeParts = parts.map((x) => {
+    // If it's the Arabic span already, keep it; else escape.
+    if (x.startsWith("<span")) return x;
+    return escapeHtml(x);
+  });
+
+  return safeParts.join(" • ");
 }
 
 // -------------------- STYLE --------------------
 function styleForFeature(feature) {
-  const name = getCountryName(feature);
-  const entry = countryData[name] || {};
+  const id = getCountryId(feature);
+  const entry = countryData[id] || {};
   return {
     fillColor: getColor(entry.status || "not_visited"),
     fillOpacity: 0.65,
@@ -90,45 +222,28 @@ function resetHighlight() {
 }
 
 // -------------------- SIDEBAR --------------------
-function populateSidebar(name) {
-  document.getElementById("country-name").innerText = name;
+function populateSidebar(names, entry) {
+  const title = document.getElementById("country-name");
+  // Sidebar title supports HTML (for Arabic span)
+  title.innerHTML = formatDisplayName(names);
 
-  const entry = countryData[name] || {};
   document.getElementById("status").value = entry.status || "not_visited";
   document.getElementById("notes").value = entry.notes || "";
 }
 
-// -------------------- TOOLTIP (HOVER) --------------------
-function statusLabel(status) {
-  if (status === "visited") return "Visited";
-  if (status === "wishlist") return "To be visited";
-  return "Not visited";
-}
-
-function escapeHtml(str) {
-  return String(str || "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
-}
-
-function tooltipContent(countryName) {
-  const entry = countryData[countryName] || {};
-  const st = statusLabel(entry.status);
-
+// -------------------- TOOLTIP (HOVER / TAP) --------------------
+function tooltipContent(names, entry) {
   const notes = (entry.notes || "").trim();
-  const notesShort = notes.length > 120 ? notes.slice(0, 120) + "…" : notes;
+  const notesShort = notes.length > 140 ? notes.slice(0, 140) + "…" : notes;
 
   return `
-    <div style="min-width:180px">
-      <div style="font-weight:700; margin-bottom:4px">${escapeHtml(countryName)}</div>
-      <div><b>Status:</b> ${escapeHtml(st)}</div>
+    <div style="min-width:200px">
+      <div style="font-weight:700; margin-bottom:4px">${formatDisplayName(names)}</div>
+      <div><b>Status:</b> ${escapeHtml(statusLabel(entry.status))}</div>
       ${
         notes
-          ? `<div style="margin-top:4px"><b>Notes:</b> ${escapeHtml(notesShort)}</div>`
-          : `<div style="margin-top:4px; opacity:.75"><i>No notes</i></div>`
+          ? `<div style="margin-top:6px"><b>Notes:</b> ${escapeHtml(notesShort)}</div>`
+          : `<div style="margin-top:6px; opacity:.75"><i>No notes</i></div>`
       }
     </div>
   `;
@@ -138,7 +253,7 @@ function tooltipContent(countryName) {
 function onEachFeature(feature, layer) {
   layer.options.interactive = true;
 
-  // Bind tooltip once; update content on hover
+  // Bind tooltip once; update on hover/tap
   layer.bindTooltip("", {
     sticky: true,
     direction: "auto",
@@ -146,13 +261,19 @@ function onEachFeature(feature, layer) {
   });
 
   layer.on("mouseover", () => {
-    const name = getCountryName(feature);
-    layer.setTooltipContent(tooltipContent(name));
+    // Hover works on desktop
+    if (isMobile()) return;
+    const id = getCountryId(feature);
+    const names = getCountryNames(feature);
+    const entry = countryData[id] || { status: "not_visited", notes: "" };
+
+    layer.setTooltipContent(tooltipContent(names, entry));
     layer.openTooltip();
     layer.setStyle({ weight: 2 });
   });
 
   layer.on("mouseout", () => {
+    if (isMobile()) return;
     layer.closeTooltip();
     if (geojsonLayer) geojsonLayer.resetStyle(layer);
   });
@@ -161,10 +282,20 @@ function onEachFeature(feature, layer) {
     resetHighlight();
 
     selectedLayer = layer;
-    selectedCountryName = getCountryName(feature);
+    selectedCountryId = getCountryId(feature);
+    selectedCountryNames = getCountryNames(feature);
+
+    const entry = countryData[selectedCountryId] || { status: "not_visited", notes: "" };
 
     highlight(layer);
-    populateSidebar(selectedCountryName);
+    populateSidebar(selectedCountryNames, entry);
+
+    // On mobile: open the panel automatically
+    if (isMobile()) setPanelOpen(true);
+
+    // Also show tooltip on tap (mobile friendly)
+    layer.setTooltipContent(tooltipContent(selectedCountryNames, entry));
+    layer.openTooltip();
   });
 }
 
@@ -180,17 +311,16 @@ fetch("africa.geojson")
       onEachFeature,
     }).addTo(map);
 
-    // Fit view to Africa layer
-    map.fitBounds(geojsonLayer.getBounds());
+    map.fitBounds(geojsonLayer.getBounds(), { padding: [10, 10] });
   })
   .catch((err) => {
     console.error(err);
-    alert("Could not load africa.geojson. Check file name/path in the repo root.");
+    alert("Could not load africa.geojson. Make sure it is in the repo root and named exactly africa.geojson.");
   });
 
 // -------------------- SAVE BUTTON --------------------
 document.getElementById("save").onclick = () => {
-  if (!selectedCountryName || !selectedLayer) {
+  if (!selectedCountryId || !selectedLayer) {
     alert("Click a country first.");
     return;
   }
@@ -198,14 +328,15 @@ document.getElementById("save").onclick = () => {
   const status = document.getElementById("status").value; // not_visited / visited / wishlist
   const notes = document.getElementById("notes").value;
 
-  countryData[selectedCountryName] = { status, notes };
+  countryData[selectedCountryId] = { status, notes };
   localStorage.setItem("africaMapData", JSON.stringify(countryData));
 
   // Update color immediately
   selectedLayer.setStyle({ fillColor: getColor(status) });
 
-  // Ensure hover tooltip reflects latest data immediately
-  selectedLayer.setTooltipContent(tooltipContent(selectedCountryName));
+  // Update tooltip to reflect latest info
+  const entry = countryData[selectedCountryId] || { status: "not_visited", notes: "" };
+  selectedLayer.setTooltipContent(tooltipContent(selectedCountryNames, entry));
 };
 
 // -------------------- EXPORT / IMPORT --------------------
