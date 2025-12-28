@@ -98,10 +98,64 @@ function populateSidebar(name) {
   document.getElementById("notes").value = entry.notes || "";
 }
 
-// -------------------- CLICK HANDLER --------------------
+// -------------------- TOOLTIP (HOVER) --------------------
+function statusLabel(status) {
+  if (status === "visited") return "Visited";
+  if (status === "wishlist") return "To be visited";
+  return "Not visited";
+}
+
+function escapeHtml(str) {
+  return String(str || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function tooltipContent(countryName) {
+  const entry = countryData[countryName] || {};
+  const st = statusLabel(entry.status);
+
+  const notes = (entry.notes || "").trim();
+  const notesShort = notes.length > 120 ? notes.slice(0, 120) + "…" : notes;
+
+  return `
+    <div style="min-width:180px">
+      <div style="font-weight:700; margin-bottom:4px">${escapeHtml(countryName)}</div>
+      <div><b>Status:</b> ${escapeHtml(st)}</div>
+      ${
+        notes
+          ? `<div style="margin-top:4px"><b>Notes:</b> ${escapeHtml(notesShort)}</div>`
+          : `<div style="margin-top:4px; opacity:.75"><i>No notes</i></div>`
+      }
+    </div>
+  `;
+}
+
+// -------------------- FEATURE EVENTS --------------------
 function onEachFeature(feature, layer) {
-  // Make sure polygons can receive clicks
   layer.options.interactive = true;
+
+  // Bind tooltip once; update content on hover
+  layer.bindTooltip("", {
+    sticky: true,
+    direction: "auto",
+    opacity: 0.95,
+  });
+
+  layer.on("mouseover", () => {
+    const name = getCountryName(feature);
+    layer.setTooltipContent(tooltipContent(name));
+    layer.openTooltip();
+    layer.setStyle({ weight: 2 });
+  });
+
+  layer.on("mouseout", () => {
+    layer.closeTooltip();
+    if (geojsonLayer) geojsonLayer.resetStyle(layer);
+  });
 
   layer.on("click", () => {
     resetHighlight();
@@ -111,14 +165,6 @@ function onEachFeature(feature, layer) {
 
     highlight(layer);
     populateSidebar(selectedCountryName);
-  });
-
-  // Optional UX: hover effect
-  layer.on("mouseover", () => {
-    layer.setStyle({ weight: 2 });
-  });
-  layer.on("mouseout", () => {
-    if (geojsonLayer) geojsonLayer.resetStyle(layer);
   });
 }
 
@@ -155,13 +201,18 @@ document.getElementById("save").onclick = () => {
   countryData[selectedCountryName] = { status, notes };
   localStorage.setItem("africaMapData", JSON.stringify(countryData));
 
-  // immediately update the clicked country color
+  // Update color immediately
   selectedLayer.setStyle({ fillColor: getColor(status) });
+
+  // Ensure hover tooltip reflects latest data immediately
+  selectedLayer.setTooltipContent(tooltipContent(selectedCountryName));
 };
 
 // -------------------- EXPORT / IMPORT --------------------
 document.getElementById("export").onclick = () => {
-  const blob = new Blob([JSON.stringify(countryData, null, 2)], { type: "application/json" });
+  const blob = new Blob([JSON.stringify(countryData, null, 2)], {
+    type: "application/json",
+  });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
   a.download = "africa-map-data.json";
