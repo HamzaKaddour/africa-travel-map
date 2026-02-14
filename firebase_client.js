@@ -1,4 +1,8 @@
 // firebase_client.js (type="module")
+// - Email/Password auth via modal
+// - Auth-first gate: show gate + auto-open modal when logged out
+// - Per-user Firestore document: users/{uid}
+// - Debounced saves to reduce writes
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.9.0/firebase-app.js";
 import {
@@ -18,7 +22,7 @@ import {
   serverTimestamp
 } from "https://www.gstatic.com/firebasejs/12.9.0/firebase-firestore.js";
 
-// Your Firebase configuration (public, OK in repo)
+// Firebase config (public, OK in repo)
 const firebaseConfig = {
   apiKey: "AIzaSyAvOz0--IBlfaq1tU_ctZoIHpH2FqDNViA",
   authDomain: "africa-map-f5c4e.firebaseapp.com",
@@ -35,7 +39,7 @@ const db = getFirestore(app);
 let currentUser = null;
 let saveTimer = null;
 
-// ---------- Modal helpers ----------
+// ---------- Modal elements ----------
 const modal = document.getElementById("authModal");
 const btnClose = document.getElementById("authModalClose");
 const inpEmail = document.getElementById("authEmail");
@@ -45,6 +49,10 @@ const btnSignUp = document.getElementById("authSignUp");
 const btnReset = document.getElementById("authReset");
 const errorBox = document.getElementById("authError");
 
+// Gate overlay
+const gate = document.getElementById("authGate");
+
+// ---------- UI helpers ----------
 function showError(msg) {
   if (!errorBox) return;
   errorBox.textContent = msg || "";
@@ -55,7 +63,6 @@ function openModal() {
   showError("");
   if (!modal) return;
   modal.classList.add("open");
-  // focus email
   setTimeout(() => inpEmail?.focus(), 0);
 }
 
@@ -69,8 +76,6 @@ window.__openAuthModal = openModal;
 window.__closeAuthModal = closeModal;
 
 btnClose?.addEventListener("click", closeModal);
-
-// click outside card closes modal
 modal?.addEventListener("click", (e) => {
   if (e.target === modal) closeModal();
 });
@@ -118,7 +123,7 @@ function scheduleSave(user, countryData) {
   }, 800);
 }
 
-// Exposed to app.js: call whenever data changes
+// Exposed to app.js
 window.__onCountryDataChanged = function (countryData) {
   if (!currentUser) return;
   window.__setCloudStatus?.("Saving…");
@@ -186,7 +191,7 @@ btnSignIn?.addEventListener("click", doSignIn);
 btnSignUp?.addEventListener("click", doSignUp);
 btnReset?.addEventListener("click", doReset);
 
-// Enter key submits Sign in by default
+// Enter submits Sign in
 [inpEmail, inpPass].forEach((el) => {
   el?.addEventListener("keydown", (e) => {
     if (e.key === "Enter") doSignIn();
@@ -209,7 +214,7 @@ function humanAuthError(e) {
   }
 }
 
-// ---------- Auth state listener ----------
+// ---------- Auth state listener (Auth-first gate) ----------
 onAuthStateChanged(auth, async (user) => {
   currentUser = user || null;
 
@@ -217,8 +222,16 @@ onAuthStateChanged(auth, async (user) => {
     window.__setAuthUI?.({ loggedIn: false });
     window.__setCloudStatus?.("");
     window.__setAppLoggedIn?.(false);
+
+    // Auth-first: show gate and auto-open modal
+    if (gate) gate.style.display = "flex";
+    openModal();
+
     return;
   }
+
+  // Logged in: hide gate
+  if (gate) gate.style.display = "none";
 
   window.__setAuthUI?.({ loggedIn: true, name: user.email || "Signed in" });
   window.__setAppLoggedIn?.(true);

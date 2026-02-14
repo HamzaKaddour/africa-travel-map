@@ -13,8 +13,9 @@
 
   <link rel="stylesheet" href="style.css" />
 
-  <!-- Auth UI styles (matches your existing design) -->
+  <!-- Auth + Gate UI styles (matches your design) -->
   <style>
+    /* Top-right auth bar */
     #authBar {
       position: fixed;
       top: 10px;
@@ -32,11 +33,13 @@
     }
     #authUser {
       font-size: 12px;
-      max-width: 240px;
+      max-width: 220px;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
       opacity: 0.9;
+      cursor: pointer;
+      user-select: none;
     }
     #cloudStatus {
       font-size: 12px;
@@ -45,16 +48,58 @@
       min-width: 70px;
       text-align: right;
     }
-    #btnLogin, #btnLogout {
+    #authBar button {
+      width: auto !important;      /* override your global button {width:100%} */
+      white-space: nowrap;
       cursor: pointer;
       border: 1px solid rgba(0,0,0,0.15);
       background: white;
       padding: 6px 10px;
       border-radius: 10px;
       font-size: 12px;
-      width: auto; /* don't force 100% like global button rule */
     }
     #btnLogout { display:none; }
+
+    /* Auth Gate overlay (auth-first) */
+    #authGate {
+      position: fixed;
+      inset: 0;
+      z-index: 15000;
+      background: rgba(247,247,247,0.97);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    #authGateCard {
+      width: min(520px, 100%);
+      background: white;
+      border: 1px solid #ddd;
+      border-radius: 16px;
+      padding: 18px;
+      box-shadow: 0 18px 50px rgba(0,0,0,0.18);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+    }
+    #authGateCard h2 {
+      margin: 0 0 8px 0;
+      font-size: 20px;
+    }
+    #authGateCard p {
+      margin: 0 0 14px 0;
+      opacity: .85;
+      line-height: 1.4;
+    }
+    #gateSignIn {
+      width: 100%;
+      padding: 10px 10px;
+      border-radius: 10px;
+      border: none;
+      background: #111;
+      color: #fff;
+      font-weight: 700;
+      cursor: pointer;
+      font-size: 16px;
+    }
 
     /* Modal overlay */
     .modalOverlay {
@@ -76,6 +121,7 @@
       border-radius: 16px;
       box-shadow: 0 18px 50px rgba(0,0,0,0.22);
       overflow: hidden;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
     }
 
     .modalHeader {
@@ -93,7 +139,7 @@
       line-height: 1.2;
     }
     .modalClose {
-      width: auto;
+      width: auto !important;
       padding: 6px 10px;
       border-radius: 10px;
       border: 1px solid #cfcfcf;
@@ -107,11 +153,7 @@
       padding: 14px;
       background: var(--bg);
     }
-
-    /* Override your global form control width inside modal only */
-    .modalBody input, .modalBody button {
-      width: 100%;
-    }
+    .modalBody input, .modalBody button { width: 100%; }
 
     .row2 {
       display: grid;
@@ -157,8 +199,8 @@
       flex-wrap: wrap;
     }
     .linkRow button {
-      width: auto;
-      padding: 0;
+      width: auto !important;
+      padding: 0 !important;
       border: none !important;
       background: transparent !important;
       color: #111 !important;
@@ -171,11 +213,20 @@
 </head>
 
 <body>
+  <!-- Auth-first gate -->
+  <div id="authGate">
+    <div id="authGateCard">
+      <h2>Sign in required</h2>
+      <p>Please sign in to load and save your personal travel map.</p>
+      <button id="gateSignIn" type="button">Sign in</button>
+    </div>
+  </div>
+
   <button id="panelToggle" class="closed" type="button">☰ Panel</button>
 
   <!-- Auth bar -->
   <div id="authBar">
-    <span id="authUser">Not signed in</span>
+    <span id="authUser" title="Click to sign in">Not signed in</span>
     <button id="btnLogin" type="button">Sign in</button>
     <button id="btnLogout" type="button">Sign out</button>
     <span id="cloudStatus"></span>
@@ -205,11 +256,10 @@
 
         <div class="linkRow">
           <button id="authReset" type="button">Forgot password?</button>
-          <button id="authSwitchMode" type="button" style="display:none;"></button>
         </div>
 
         <div class="hint">
-          Your password is handled by Firebase Authentication and is never stored in this GitHub repo.
+          Passwords are handled by Firebase Authentication and are never stored in this GitHub repo.
         </div>
       </div>
     </div>
@@ -228,11 +278,11 @@
     <label for="notes">Notes</label>
     <textarea id="notes" rows="6" placeholder="Add notes..."></textarea>
 
-    <button id="save">Save</button>
+    <button id="save" type="button">Save</button>
 
     <hr />
 
-    <button id="export">Export Map</button>
+    <button id="export" type="button">Export Map</button>
     <input type="file" id="import" />
   </div>
 
@@ -240,7 +290,7 @@
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
-  <!-- Your app logic -->
+  <!-- App logic -->
   <script src="app.js"></script>
 
   <!-- Firebase (module) -->
@@ -255,10 +305,12 @@
 
       if (!loggedIn) {
         userEl.textContent = "Not signed in";
+        userEl.title = "Click to sign in";
         loginBtn.style.display = "";
         logoutBtn.style.display = "none";
       } else {
         userEl.textContent = name || "Signed in";
+        userEl.title = "Signed in";
         loginBtn.style.display = "none";
         logoutBtn.style.display = "";
       }
@@ -269,7 +321,12 @@
       if (el) el.textContent = txt || "";
     };
 
+    // Open modal from multiple places
     document.getElementById("btnLogin").addEventListener("click", () => window.__openAuthModal?.());
+    document.getElementById("authUser").addEventListener("click", () => window.__openAuthModal?.());
+    document.getElementById("gateSignIn").addEventListener("click", () => window.__openAuthModal?.());
+
+    // Sign out
     document.getElementById("btnLogout").addEventListener("click", () => window.__logout?.());
 
     // Close modal on ESC

@@ -1,10 +1,7 @@
 // ============================================================
-// Africa Travel Map - app.js (Firebase-ready, no localStorage)
-// - Clickable countries
-// - Status + notes saved per country (Cloud Firestore per user)
-// - Tooltip on hover (desktop) + tap-friendly behavior (mobile)
-// - Mobile bottom-sheet panel toggle
-// - Shows names in Arabic + English + French (if available in GeoJSON)
+// Africa Travel Map - app.js (Auth-first friendly)
+// - Map loads, but saving/importing requires sign-in
+// - Country state comes from Firestore (per user) via firebase_client.js
 // ============================================================
 
 // -------------------- MOBILE PANEL TOGGLE --------------------
@@ -17,8 +14,6 @@ function setPanelOpen(isOpen) {
   panelToggleBtn.classList.toggle("closed", !isOpen);
   panelToggleBtn.textContent = isOpen ? "✕ Close" : "☰ Panel";
 }
-
-// Default: closed on mobile, ignored on desktop layout
 setPanelOpen(false);
 
 if (panelToggleBtn) {
@@ -28,7 +23,6 @@ if (panelToggleBtn) {
   });
 }
 
-// Helper: true on small screens
 function isMobile() {
   return window.matchMedia && window.matchMedia("(max-width: 820px)").matches;
 }
@@ -47,14 +41,23 @@ let selectedCountryId = null;
 let selectedCountryNames = null;
 
 // Cloud-backed state (loaded after login)
-let countryData = {}; // countryData[id] = { status: "...", notes: "..." }
-
+let countryData = {}; // countryData[id] = { status, notes }
 let isLoggedIn = false;
 
 // Called by firebase_client.js
 window.__setAppLoggedIn = function (v) {
   isLoggedIn = !!v;
+
+  // Optional UX: disable save/import when logged out
+  const saveBtn = document.getElementById("save");
+  const importEl = document.getElementById("import");
+
+  if (saveBtn) saveBtn.disabled = !isLoggedIn;
+  if (importEl) importEl.disabled = !isLoggedIn;
 };
+
+// Initialize disabled state until auth updates it
+window.__setAppLoggedIn(false);
 
 // -------------------- HELPERS --------------------
 function escapeHtml(s) {
@@ -74,9 +77,9 @@ function statusLabel(status) {
 }
 
 function getColor(status) {
-  if (status === "visited") return "#2ecc71";    // green
-  if (status === "wishlist") return "#f39c12";   // orange
-  return "#bdc3c7";                               // gray
+  if (status === "visited") return "#2ecc71";
+  if (status === "wishlist") return "#f39c12";
+  return "#bdc3c7";
 }
 
 function pickFirstString(obj, keys) {
@@ -150,24 +153,17 @@ function getCountryNames(feature) {
   ]);
 
   const fallback = detectFallbackName(p);
-
   return { en: en || "", fr: fr || "", ar: ar || "", fallback };
 }
 
 function formatDisplayName(names) {
   const parts = [];
-  if (names.en) parts.push(names.en);
-  if (names.fr) parts.push(names.fr);
+  if (names.en) parts.push(escapeHtml(names.en));
+  if (names.fr) parts.push(escapeHtml(names.fr));
   if (names.ar) parts.push(`<span dir="rtl" lang="ar">${escapeHtml(names.ar)}</span>`);
 
   if (parts.length === 0) return escapeHtml(names.fallback || "Unknown");
-
-  const safeParts = parts.map((x) => {
-    if (x.startsWith("<span")) return x;
-    return escapeHtml(x);
-  });
-
-  return safeParts.join(" • ");
+  return parts.join(" • ");
 }
 
 // -------------------- STYLE --------------------
@@ -206,7 +202,7 @@ function populateSidebar(names, entry) {
   document.getElementById("notes").value = entry.notes || "";
 }
 
-// -------------------- TOOLTIP (HOVER / TAP) --------------------
+// -------------------- TOOLTIP --------------------
 function tooltipContent(names, entry) {
   const notes = (entry.notes || "").trim();
   const notesShort = notes.length > 140 ? notes.slice(0, 140) + "…" : notes;
@@ -292,7 +288,8 @@ fetch("africa.geojson")
 // -------------------- SAVE BUTTON --------------------
 document.getElementById("save").onclick = () => {
   if (!isLoggedIn) {
-    alert("Please sign in first (top-right) to save your data.");
+    alert("Please sign in first to save your map.");
+    window.__openAuthModal?.();
     return;
   }
 
@@ -313,8 +310,8 @@ document.getElementById("save").onclick = () => {
   const entry = countryData[selectedCountryId] || { status: "not_visited", notes: "" };
   selectedLayer.setTooltipContent(tooltipContent(selectedCountryNames, entry));
 
-  // Notify Firebase to persist
-  if (window.__onCountryDataChanged) window.__onCountryDataChanged(countryData);
+  // Persist to cloud
+  window.__onCountryDataChanged?.(countryData);
 };
 
 // -------------------- EXPORT / IMPORT --------------------
@@ -330,7 +327,8 @@ document.getElementById("export").onclick = () => {
 
 document.getElementById("import").onchange = (e) => {
   if (!isLoggedIn) {
-    alert("Please sign in first (top-right) to import and save to your account.");
+    alert("Please sign in first to import into your account.");
+    window.__openAuthModal?.();
     e.target.value = "";
     return;
   }
@@ -351,7 +349,7 @@ document.getElementById("import").onchange = (e) => {
       refreshSelectedSidebarIfNeeded();
 
       // Persist to cloud
-      if (window.__onCountryDataChanged) window.__onCountryDataChanged(countryData);
+      window.__onCountryDataChanged?.(countryData);
 
       alert("Imported successfully.");
     } catch {
@@ -361,11 +359,10 @@ document.getElementById("import").onchange = (e) => {
   reader.readAsText(file);
 };
 
-// -------------------- FIREBASE BRIDGE HOOKS --------------------
-// Called by firebase_client.js when it loads data from Firestore
+// -------------------- FIREBASE BRIDGE HOOK --------------------
+// Called by firebase_client.js after loading from Firestore
 window.__applyCountryDataFromCloud = function (newData) {
   countryData = newData || {};
-
   if (geojsonLayer) geojsonLayer.resetStyle();
   refreshSelectedSidebarIfNeeded();
 };
