@@ -1,7 +1,7 @@
 // ============================================================
-// Africa Travel Map - Full app.js
+// Africa Travel Map - app.js (Firebase-ready, no localStorage)
 // - Clickable countries
-// - Status (gray/green/orange) + notes saved per country
+// - Status + notes saved per country (Cloud Firestore per user)
 // - Tooltip on hover (desktop) + tap-friendly behavior (mobile)
 // - Mobile bottom-sheet panel toggle
 // - Shows names in Arabic + English + French (if available in GeoJSON)
@@ -41,83 +41,70 @@ L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
 }).addTo(map);
 
 // -------------------- STATE --------------------
+let geojsonLayer = null;
 let selectedLayer = null;
 let selectedCountryId = null;
-let selectedCountryNames = null; // {en, fr, ar, fallback}
-let geojsonLayer = null;
+let selectedCountryNames = null;
 
-// Saved per-user in browser
-// Structure:
-// countryData[id] = { status: "visited|wishlist|not_visited", notes: "..." }
-let countryData = JSON.parse(localStorage.getItem("africaMapData")) || {};
+// Cloud-backed state (loaded after login)
+let countryData = {}; // countryData[id] = { status: "...", notes: "..." }
 
-// -------------------- COLORS --------------------
-function getColor(status) {
-  if (status === "visited") return "#2ecc71";   // green
-  if (status === "wishlist") return "#f5b041";  // light orange
-  return "#bdc3c7";                             // gray (default)
+let isLoggedIn = false;
+
+// Called by firebase_client.js
+window.__setAppLoggedIn = function (v) {
+  isLoggedIn = !!v;
+};
+
+// -------------------- HELPERS --------------------
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#039;",
+  }[c]));
 }
 
-// -------------------- UTIL: HTML escape --------------------
-function escapeHtml(str) {
-  return String(str || "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
-}
-
-// -------------------- STATUS LABEL --------------------
 function statusLabel(status) {
   if (status === "visited") return "Visited";
   if (status === "wishlist") return "To be visited";
   return "Not visited";
 }
 
-// -------------------- COUNTRY ID DETECTION --------------------
-// We store by ID (ISO code if present) to keep data stable.
-function getCountryId(feature) {
-  const p = feature.properties || {};
-
-  // Common ISO fields in many country GeoJSON sources
-  const candidates = [
-    "ISO_A3", "iso_a3",
-    "ADM0_A3", "adm0_a3",
-    "ISO3", "iso3",
-    "ISO", "iso",
-    "WB_A3", "wb_a3",
-    "id", "ID"
-  ];
-
-  for (const k of candidates) {
-    const v = p[k];
-    if (typeof v === "string" && v.trim().length >= 2) return v.trim();
-    if (typeof v === "number" && Number.isFinite(v)) return String(v);
-  }
-
-  // Fallback: use a detected name (still works, but less stable)
-  const names = getCountryNames(feature);
-  return names.en || names.fr || names.ar || names.fallback || "Unknown";
+function getColor(status) {
+  if (status === "visited") return "#2ecc71";    // green
+  if (status === "wishlist") return "#f39c12";   // orange
+  return "#bdc3c7";                               // gray
 }
 
-// -------------------- NAME FIELDS DETECTION (AR/EN/FR) --------------------
-// This tries to find name in multiple languages based on common keys.
-// If your GeoJSON uses different keys, it will still fallback to something sensible.
-function pickFirstString(p, keys) {
+function pickFirstString(obj, keys) {
   for (const k of keys) {
-    const v = p[k];
-    if (typeof v === "string" && v.trim().length > 0) return v.trim();
+    if (typeof obj[k] === "string" && obj[k].trim()) return obj[k].trim();
   }
   return "";
 }
 
+function getCountryId(feature) {
+  const p = feature.properties || {};
+  return (
+    p.ISO_A3 ||
+    p.iso_a3 ||
+    p.ADM0_A3 ||
+    p.adm0_a3 ||
+    p.ISO3 ||
+    p.iso3 ||
+    p.NAME ||
+    p.name ||
+    JSON.stringify(p).slice(0, 40)
+  );
+}
+
 function detectFallbackName(p) {
-  // Generic fallbacks if no language-specific match
   const preferred = [
-    "ADMIN", "admin",
     "NAME", "name",
-    "NAME_EN", "name_en",
+    "ADMIN", "admin",
     "NAME_LONG", "name_long",
     "SOVEREIGNT", "sovereignt",
     "FORMAL_EN", "formal_en"
@@ -125,12 +112,10 @@ function detectFallbackName(p) {
   const v = pickFirstString(p, preferred);
   if (v) return v;
 
-  // any key containing "name"
   const keys = Object.keys(p);
   const nameLike = keys.find(k => k.toLowerCase().includes("name") && typeof p[k] === "string" && p[k].trim());
   if (nameLike) return p[nameLike].trim();
 
-  // fallback: first non-empty string property
   for (const k of keys) {
     if (typeof p[k] === "string" && p[k].trim().length > 0) return p[k].trim();
   }
@@ -140,8 +125,6 @@ function detectFallbackName(p) {
 function getCountryNames(feature) {
   const p = feature.properties || {};
 
-  // These are common naming conventions across datasets.
-  // Arabic can appear as NAME_AR / name_ar / AR / ArabicName etc.
   const en = pickFirstString(p, [
     "NAME_EN", "name_en",
     "EN_NAME", "en_name",
@@ -168,31 +151,18 @@ function getCountryNames(feature) {
 
   const fallback = detectFallbackName(p);
 
-  return {
-    en: en || "",
-    fr: fr || "",
-    ar: ar || "",
-    fallback
-  };
+  return { en: en || "", fr: fr || "", ar: ar || "", fallback };
 }
 
-// Format display name in sidebar + tooltip
 function formatDisplayName(names) {
-  // Show all available: English • Français • العربية
-  // (If one is missing, skip it.)
   const parts = [];
   if (names.en) parts.push(names.en);
   if (names.fr) parts.push(names.fr);
-
-  // Arabic: render with RTL direction for correctness
   if (names.ar) parts.push(`<span dir="rtl" lang="ar">${escapeHtml(names.ar)}</span>`);
 
   if (parts.length === 0) return escapeHtml(names.fallback || "Unknown");
 
-  // English/French are plain text; Arabic already escaped above
-  // Escape EN/FR too:
   const safeParts = parts.map((x) => {
-    // If it's the Arabic span already, keep it; else escape.
     if (x.startsWith("<span")) return x;
     return escapeHtml(x);
   });
@@ -221,10 +191,15 @@ function resetHighlight() {
   if (geojsonLayer) geojsonLayer.resetStyle();
 }
 
+function refreshSelectedSidebarIfNeeded() {
+  if (!selectedCountryId || !selectedCountryNames) return;
+  const entry = countryData[selectedCountryId] || { status: "not_visited", notes: "" };
+  populateSidebar(selectedCountryNames, entry);
+}
+
 // -------------------- SIDEBAR --------------------
 function populateSidebar(names, entry) {
   const title = document.getElementById("country-name");
-  // Sidebar title supports HTML (for Arabic span)
   title.innerHTML = formatDisplayName(names);
 
   document.getElementById("status").value = entry.status || "not_visited";
@@ -253,7 +228,6 @@ function tooltipContent(names, entry) {
 function onEachFeature(feature, layer) {
   layer.options.interactive = true;
 
-  // Bind tooltip once; update on hover/tap
   layer.bindTooltip("", {
     sticky: true,
     direction: "auto",
@@ -261,7 +235,6 @@ function onEachFeature(feature, layer) {
   });
 
   layer.on("mouseover", () => {
-    // Hover works on desktop
     if (isMobile()) return;
     const id = getCountryId(feature);
     const names = getCountryNames(feature);
@@ -290,10 +263,8 @@ function onEachFeature(feature, layer) {
     highlight(layer);
     populateSidebar(selectedCountryNames, entry);
 
-    // On mobile: open the panel automatically
     if (isMobile()) setPanelOpen(true);
 
-    // Also show tooltip on tap (mobile friendly)
     layer.setTooltipContent(tooltipContent(selectedCountryNames, entry));
     layer.openTooltip();
   });
@@ -320,23 +291,30 @@ fetch("africa.geojson")
 
 // -------------------- SAVE BUTTON --------------------
 document.getElementById("save").onclick = () => {
+  if (!isLoggedIn) {
+    alert("Please sign in first (top-right) to save your data.");
+    return;
+  }
+
   if (!selectedCountryId || !selectedLayer) {
     alert("Click a country first.");
     return;
   }
 
-  const status = document.getElementById("status").value; // not_visited / visited / wishlist
+  const status = document.getElementById("status").value;
   const notes = document.getElementById("notes").value;
 
   countryData[selectedCountryId] = { status, notes };
-  localStorage.setItem("africaMapData", JSON.stringify(countryData));
 
   // Update color immediately
   selectedLayer.setStyle({ fillColor: getColor(status) });
 
-  // Update tooltip to reflect latest info
+  // Update tooltip
   const entry = countryData[selectedCountryId] || { status: "not_visited", notes: "" };
   selectedLayer.setTooltipContent(tooltipContent(selectedCountryNames, entry));
+
+  // Notify Firebase to persist
+  if (window.__onCountryDataChanged) window.__onCountryDataChanged(countryData);
 };
 
 // -------------------- EXPORT / IMPORT --------------------
@@ -351,18 +329,43 @@ document.getElementById("export").onclick = () => {
 };
 
 document.getElementById("import").onchange = (e) => {
+  if (!isLoggedIn) {
+    alert("Please sign in first (top-right) to import and save to your account.");
+    e.target.value = "";
+    return;
+  }
+
   const file = e.target.files[0];
   if (!file) return;
 
   const reader = new FileReader();
   reader.onload = () => {
     try {
-      countryData = JSON.parse(reader.result);
-      localStorage.setItem("africaMapData", JSON.stringify(countryData));
-      location.reload();
+      const parsed = JSON.parse(reader.result);
+
+      // Replace current state
+      countryData = parsed || {};
+
+      // Repaint everything
+      if (geojsonLayer) geojsonLayer.resetStyle();
+      refreshSelectedSidebarIfNeeded();
+
+      // Persist to cloud
+      if (window.__onCountryDataChanged) window.__onCountryDataChanged(countryData);
+
+      alert("Imported successfully.");
     } catch {
       alert("Invalid JSON file.");
     }
   };
   reader.readAsText(file);
+};
+
+// -------------------- FIREBASE BRIDGE HOOKS --------------------
+// Called by firebase_client.js when it loads data from Firestore
+window.__applyCountryDataFromCloud = function (newData) {
+  countryData = newData || {};
+
+  if (geojsonLayer) geojsonLayer.resetStyle();
+  refreshSelectedSidebarIfNeeded();
 };
