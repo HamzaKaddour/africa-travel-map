@@ -12,10 +12,208 @@
   />
 
   <link rel="stylesheet" href="style.css" />
-</head>
-<body>
-<button id="panelToggle" class="closed" type="button">☰ Panel</button>
 
+  <!-- Auth UI styles (matches your existing design) -->
+  <style>
+    #authBar {
+      position: fixed;
+      top: 10px;
+      right: 10px;
+      z-index: 9999;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      padding: 8px 10px;
+      border-radius: 12px;
+      background: rgba(255,255,255,0.92);
+      box-shadow: 0 6px 18px rgba(0,0,0,0.12);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+      backdrop-filter: blur(6px);
+    }
+    #authUser {
+      font-size: 12px;
+      max-width: 240px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      opacity: 0.9;
+    }
+    #cloudStatus {
+      font-size: 12px;
+      opacity: 0.75;
+      padding-left: 4px;
+      min-width: 70px;
+      text-align: right;
+    }
+    #btnLogin, #btnLogout {
+      cursor: pointer;
+      border: 1px solid rgba(0,0,0,0.15);
+      background: white;
+      padding: 6px 10px;
+      border-radius: 10px;
+      font-size: 12px;
+      width: auto; /* don't force 100% like global button rule */
+    }
+    #btnLogout { display:none; }
+
+    /* Modal overlay */
+    .modalOverlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.45);
+      z-index: 20000;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+    }
+    .modalOverlay.open { display: flex; }
+
+    .modalCard {
+      width: min(420px, 100%);
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      box-shadow: 0 18px 50px rgba(0,0,0,0.22);
+      overflow: hidden;
+    }
+
+    .modalHeader {
+      padding: 14px 14px 10px 14px;
+      background: #fff;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+    }
+    .modalHeader h3 {
+      margin: 0;
+      font-size: 16px;
+      line-height: 1.2;
+    }
+    .modalClose {
+      width: auto;
+      padding: 6px 10px;
+      border-radius: 10px;
+      border: 1px solid #cfcfcf;
+      background: #fff;
+      color: #111;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    .modalBody {
+      padding: 14px;
+      background: var(--bg);
+    }
+
+    /* Override your global form control width inside modal only */
+    .modalBody input, .modalBody button {
+      width: 100%;
+    }
+
+    .row2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-top: 10px;
+    }
+    .btnPrimary {
+      background: #111 !important;
+      color: #fff !important;
+      border: none !important;
+    }
+    .btnSecondary {
+      background: #fff !important;
+      color: #111 !important;
+      border: 1px solid #cfcfcf !important;
+    }
+
+    .hint {
+      margin-top: 10px;
+      font-size: 12px;
+      opacity: 0.85;
+      line-height: 1.4;
+    }
+
+    .errorBox {
+      display: none;
+      margin-top: 10px;
+      padding: 10px;
+      border-radius: 12px;
+      background: #fff;
+      border: 1px solid rgba(0,0,0,0.12);
+      color: #b00020;
+      font-size: 13px;
+    }
+    .errorBox.show { display: block; }
+
+    .linkRow {
+      margin-top: 10px;
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .linkRow button {
+      width: auto;
+      padding: 0;
+      border: none !important;
+      background: transparent !important;
+      color: #111 !important;
+      font-weight: 700;
+      cursor: pointer;
+      text-decoration: underline;
+      font-size: 12px;
+    }
+  </style>
+</head>
+
+<body>
+  <button id="panelToggle" class="closed" type="button">☰ Panel</button>
+
+  <!-- Auth bar -->
+  <div id="authBar">
+    <span id="authUser">Not signed in</span>
+    <button id="btnLogin" type="button">Sign in</button>
+    <button id="btnLogout" type="button">Sign out</button>
+    <span id="cloudStatus"></span>
+  </div>
+
+  <!-- Login Modal -->
+  <div id="authModal" class="modalOverlay" role="dialog" aria-modal="true" aria-labelledby="authTitle">
+    <div class="modalCard">
+      <div class="modalHeader">
+        <h3 id="authTitle">Sign in</h3>
+        <button id="authModalClose" class="modalClose" type="button">✕</button>
+      </div>
+
+      <div class="modalBody">
+        <label for="authEmail">Email</label>
+        <input id="authEmail" type="email" autocomplete="email" placeholder="name@example.com" />
+
+        <label for="authPassword">Password</label>
+        <input id="authPassword" type="password" autocomplete="current-password" placeholder="Your password" />
+
+        <div id="authError" class="errorBox"></div>
+
+        <div class="row2">
+          <button id="authSignIn" class="btnPrimary" type="button">Sign in</button>
+          <button id="authSignUp" class="btnSecondary" type="button">Create account</button>
+        </div>
+
+        <div class="linkRow">
+          <button id="authReset" type="button">Forgot password?</button>
+          <button id="authSwitchMode" type="button" style="display:none;"></button>
+        </div>
+
+        <div class="hint">
+          Your password is handled by Firebase Authentication and is never stored in this GitHub repo.
+        </div>
+      </div>
+    </div>
+  </div>
 
   <div id="sidebar">
     <h2 id="country-name">Click a country</h2>
@@ -41,6 +239,43 @@
   <div id="map"></div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <!-- Your app logic -->
   <script src="app.js"></script>
+
+  <!-- Firebase (module) -->
+  <script type="module" src="firebase_client.js"></script>
+
+  <script>
+    // Auth bar UI glue (called by firebase_client.js)
+    window.__setAuthUI = function ({ loggedIn, name }) {
+      const userEl = document.getElementById("authUser");
+      const loginBtn = document.getElementById("btnLogin");
+      const logoutBtn = document.getElementById("btnLogout");
+
+      if (!loggedIn) {
+        userEl.textContent = "Not signed in";
+        loginBtn.style.display = "";
+        logoutBtn.style.display = "none";
+      } else {
+        userEl.textContent = name || "Signed in";
+        loginBtn.style.display = "none";
+        logoutBtn.style.display = "";
+      }
+    };
+
+    window.__setCloudStatus = function (txt) {
+      const el = document.getElementById("cloudStatus");
+      if (el) el.textContent = txt || "";
+    };
+
+    document.getElementById("btnLogin").addEventListener("click", () => window.__openAuthModal?.());
+    document.getElementById("btnLogout").addEventListener("click", () => window.__logout?.());
+
+    // Close modal on ESC
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") window.__closeAuthModal?.();
+    });
+  </script>
 </body>
 </html>
