@@ -23,6 +23,9 @@ import {
 } from "https://www.gstatic.com/firebasejs/12.9.0/firebase-firestore.js";
 
 // Firebase config (public, OK in repo)
+const btnSignOutModal = document.getElementById("authSignOut");
+
+
 const firebaseConfig = {
   apiKey: "AIzaSyAvOz0--IBlfaq1tU_ctZoIHpH2FqDNViA",
   authDomain: "africa-map-f5c4e.firebaseapp.com",
@@ -123,6 +126,12 @@ function scheduleSave(user, countryData) {
   }, 800);
 }
 
+btnSignOutModal?.addEventListener("click", async () => {
+  await window.__logout?.();
+  closeModal();
+});
+
+
 // Exposed to app.js
 window.__onCountryDataChanged = function (countryData) {
   if (!currentUser) return;
@@ -222,12 +231,15 @@ onAuthStateChanged(auth, async (user) => {
     window.__setAuthUI?.({ loggedIn: false });
     window.__setCloudStatus?.("");
     window.__setAppLoggedIn?.(false);
+    btnSignOutModal && (btnSignOutModal.style.display = "none");
 
     // Auth-first: show gate and auto-open modal
     if (gate) gate.style.display = "flex";
     openModal();
 
     return;
+  }else {
+  btnSignOutModal && (btnSignOutModal.style.display = "");
   }
 
   // Logged in: hide gate

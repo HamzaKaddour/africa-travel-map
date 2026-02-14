@@ -157,4 +157,32 @@ hr {
     font-size: 14px;
     padding: 8px 10px;
   }
+
+  #authBar {
+  max-width: calc(100vw - 20px);
+}
+
+#authUser {
+  max-width: 160px;  /* tighter so buttons always fit */
+}
+
+#cloudStatus {
+  min-width: auto;
+  max-width: 90px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#authBar button {
+  flex: 0 0 auto;     /* don’t stretch */
+  width: auto !important;
+}
+
+#btnLogin, #btnLogout {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
 }
